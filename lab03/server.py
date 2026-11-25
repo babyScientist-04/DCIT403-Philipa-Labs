@@ -58,7 +58,47 @@ def list_expiring(days: int = 60) -> list[dict]:
     return sorted(out, key=lambda r: r["days_left"])
 
 
-# (Step 4: the record_sale tool goes HERE)
+# ---------------- WRITE TOOL (action / actuator) ----------------
+
+def save(rows):
+    with open(DATA, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+@mcp.tool()
+def record_sale(item: str, strength: str, qty: int) -> dict:
+    """ACTION - CHANGES STOCK. Record that qty packs of ONE medicine were sold and
+    reduce its stock. Only call this when the user clearly says to sell or record
+    a sale. For price questions use check_stock instead. strength is required, e.g. "500mg".
+    The sale is REFUSED (stock unchanged) if qty is not a positive whole number,
+    no product or more than one product matches, the product has expired, or there
+    is not enough stock. Always pass the returned message on to the user."""
+    if qty <= 0:
+        return {"ok": False, "message": f"Refused: quantity must be positive (got {qty})."}
+
+    rows = load()
+    found = match(rows, item, strength)
+    if not found:
+        return {"ok": False, "message": f"Refused: no product matches '{item} {strength}'."}
+    if len(found) > 1:
+        return {"ok": False, "message": "Refused: more than one product matches; give the exact strength."}
+
+    row = found[0]
+    if dt.date.fromisoformat(row["expiry_date"]) < dt.date.today():
+        return {"ok": False, "message": f'Refused: {row["item"]} expired on {row["expiry_date"]}.'}
+
+    have = int(row["quantity"])
+    if qty > have:
+        return {"ok": False, "message": f'Refused: only {have} packs of {row["item"]} '
+                                        f'{row["strength"]} in stock, cannot sell {qty}.'}
+
+    row["quantity"] = str(have - qty)   # row is inside rows, so rows is updated too
+    save(rows)
+    total = qty * float(row["unit_price_ghs"])
+    return {"ok": True, "message": f'Sold {qty} x {row["item"]} {row["strength"]} for '
+                                   f'GHS {total:.2f}. {row["quantity"]} packs left.'}
 
 
 if __name__ == "__main__":
